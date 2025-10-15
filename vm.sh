@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+VM="${VM:-debian12}"
+IMAGES_DIR="${IMAGES_DIR:-/var/lib/libvirt/images}"
+
 # utils
 info() {
   printf "\033[1;36mINFO:\033[0m %s\n" "$*"
@@ -69,3 +72,35 @@ vm_index() {
     fi
   done
 }
+
+IDX="$(vm_index "$VM")" || true
+[ -n "$IDX" ] || error "No such virtual machine [$VM] in inventory.toml"
+
+HOSTNAME="$(toml_get_str "vm[$IDX].hostname")"; [ -n "$HOSTNAME" ] || HOSTNAME="$VM"
+OS_VARIANT="$(toml_get_str "vm[$IDX].os_variant")"; [ -n "$OS_VARIANT" ] || OS_VARIANT="$(toml_get_str defaults.os_variant)"; [ -n "$OS_VARIANT" ] || error "os_variant not defined for $VM or no defaults.os_variant found"
+
+NET_NAME="$(toml_get_str defaults.net)"; [ -n "$NET_NAME" ]
+virsh net-info "$NET_NAME" >/dev/null 2>&1 || error "libvirt network '$NET_NAME' not found"
+
+MEM="$(toml_get_int "vm[$IDX].memory_mb" "$(toml_get_int defaults.memory_mb 2048)")"
+VCPUS="$(toml_get_int "vm[$IDX].vcpus" "$(toml_get_int defaults.vcpus 2)")"
+
+IMG_URL="$(toml_get_str "vm[$IDX].img_url")"; [ -n "$IMG_URL" ] || error "vm[$IDX].img_url not found"
+IMG_NAME="$(basename -- "$IMG_URL")"
+BASE_IMG="${IMAGES_DIR}/${IMG_NAME}"
+
+SUMS_URL="$(toml_get_str "vm[$IDX].sums_url")"
+SUMS_TYPE="$(toml_get_str "vm[$IDX].sums_type")"; [ -n "$SUMS_TYPE" ] || SUMS_TYPE="auto"
+
+MODE="$(toml_get_str "vm[$IDX].mode")"; [ -n "$MODE" ] || MODE="dhcp"
+MAC_ADDR="$(toml_get_str "vm[$IDX].mac")"
+
+STATIC_IP="$(toml_get_str "vm[$IDX].ip")"
+PREFIX="$(toml_get_int "vm[$IDX].prefix" "$(toml_get_int defaults.prefix 24)")"
+DNS_JSON="$(toml_get "vm[$IDX].dns")"; [ "$DNS_JSON" = "null" ] && DNS_JSON="$(toml_get defaults.dns)"
+DNS_LIST="$(echo "$DNS_JSON" | python3 -c 'import sys,json; a=json.load(sys.stdin); print(",".join(a) if a else "")')"
+GW="$(toml_get_str "vm[$IDX].gw")"
+if [ "$MODE" = "static" ]; then
+  [ -n "$STATIC_IP" ] || error "Static mode requires ip="
+  [ -n "$GW" ] || GW="$(echo "$STATIC_IP" | awk -F. '{printf "%d.%d.%d.1",$1,$2,$3}')"
+fi
