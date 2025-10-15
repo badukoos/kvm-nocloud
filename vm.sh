@@ -104,3 +104,9 @@ if [ "$MODE" = "static" ]; then
   [ -n "$STATIC_IP" ] || error "Static mode requires ip="
   [ -n "$GW" ] || GW="$(echo "$STATIC_IP" | awk -F. '{printf "%d.%d.%d.1",$1,$2,$3}')"
 fi
+
+SSH_USER="$(toml_get_str defaults.ssh_user)"; [ -n "$SSH_USER" ]
+SSH_KEY_PATH="$(toml_get_str defaults.ssh_key)"; [ -n "$SSH_KEY_PATH" ]
+[ -r "$SSH_KEY_PATH" ] || error "SSH key not readable $SSH_KEY_PATH"
+SSH_PUB="$(cat "$SSH_KEY_PATH".pub 2>/dev/null || ssh-keygen -y -f "$SSH_KEY_PATH" 2>/dev/null || true)"
+[ -n "$SSH_PUB" ] || error "Could not obtain public key from $SSH_KEY_PATH.pub"
