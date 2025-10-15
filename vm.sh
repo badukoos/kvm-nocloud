@@ -22,6 +22,9 @@ for t in python3 curl sha256sum sha512sum virsh virt-install cloud-localds; do
   requires "$t"
 done
 
+[ -f inventory.toml ] || { echo "inventory.toml not found" >&2; exit 1; }
+
+# toml helpers
 toml_get(){ python3 - "$1" <<'PY'
 import sys,json,tomllib
 expr=sys.argv[1]
@@ -39,6 +42,30 @@ print(json.dumps(get(data,expr)))
 PY
 }
 
-toml_get "defaults.dns[0]"
-toml_get "vm[0].hostname"
-toml_get "vm[1].memory_mb"
+toml_get_str() {
+  v="$(toml_get "$1")"
+  if [ "$v" = "null" ]; then
+    echo ""
+    return
+  fi
+  echo "$v" | tr -d '"'
+}
+
+toml_get_int() {
+  raw="$(toml_get "$1")"
+  def="${2:-}"
+  [ "$raw" = "null" ] && raw=""
+  raw="$(echo "$raw" | tr -d '"')"
+  echo "${raw:-$def}"
+}
+
+vm_index() {
+  n=$(toml_get "vm" | python3 -c 'import sys, json; print(len(json.load(sys.stdin) or []))')
+  for i in $(seq 0 $((n - 1))); do
+    this=$(toml_get "vm[$i].name" | tr -d '"')
+    if [ "$this" = "$1" ]; then
+      echo "$i"
+      return
+    fi
+  done
+}
