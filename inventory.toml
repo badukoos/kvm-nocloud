@@ -1,0 +1,46 @@
+[defaults]
+os_variant = "generic"
+memory_mb  = 2048
+vcpus      = 2
+net        = "virbr99"
+ssh_user   = "kvm-user"
+ssh_key    = "/home/arun/.ssh/kvm-user"
+dns        = ["1.1.1.1","8.8.8.8"]
+prefix     = 24
+
+userdata_yaml = """
+#cloud-config
+users:
+  - name: kvm-user
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    groups: [sudo]
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGlVZjfy0JqwKvxE6aT8N5glji6iuqFvdCuIKJfH8Jx5 kvm-user@local
+ssh_pwauth: false
+disable_root: true
+package_update: true
+packages: [openssh-server]
+runcmd:
+  - systemctl enable ssh --now || systemctl enable sshd --now || true
+"""
+
+[[vm]]
+name       = "debian12"
+hostname   = "debian12"
+os_variant = "debian12"
+img_url    = "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2"
+sums_url   = "https://cloud.debian.org/images/cloud/bookworm/latest/SHA512SUMS"
+sums_type  = "sha512"
+mode       = "static"
+ip         = "192.168.99.101"
+gw         = "192.168.99.1"
+mac        = "52:54:00:99:99:99"
+
+userdata_yaml = """
+#cloud-config
+packages:
+  - qemu-guest-agent
+runcmd:
+  - systemctl enable qemu-guest-agent --now || true
+"""
