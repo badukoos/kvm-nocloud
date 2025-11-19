@@ -2,7 +2,7 @@
 os_variant = "generic"
 memory_mb  = 2048
 vcpus      = 2
-net        = "virbr99"
+net        = "default"
 ssh_user   = "kvm-user"
 ssh_key    = "/home/arun/.ssh/kvm-user"
 dns        = ["1.1.1.1","8.8.8.8"]
@@ -16,7 +16,7 @@ users:
     groups: [sudo]
     shell: /bin/bash
     ssh_authorized_keys:
-      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGlVZjfy0JqwKvxE6aT8N5glji6iuqFvdCuIKJfH8Jx5 kvm-user@local
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMuAaIClutm9QpUX54UrCOwn9b1hD6K8CdVxQoeIVKVo kvm-user@lab.local
 ssh_pwauth: false
 disable_root: true
 package_update: true
@@ -33,9 +33,64 @@ img_url    = "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-ge
 sums_url   = "https://cloud.debian.org/images/cloud/bookworm/latest/SHA512SUMS"
 sums_type  = "sha512"
 mode       = "static"
-ip         = "192.168.99.101"
-gw         = "192.168.99.1"
+ip         = "192.168.122.101"
+gw         = "192.168.122.1"
 mac        = "52:54:00:99:99:99"
+
+userdata_yaml = """
+#cloud-config
+packages:
+  - qemu-guest-agent
+runcmd:
+  - systemctl enable qemu-guest-agent --now || true
+"""
+
+[[vm]]
+name       = "fedora42"
+hostname   = "fedora42"
+os_variant = "fedora-unknown"
+img_url    = "https://download.fedoraproject.org/pub/fedora/linux/releases/42/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-42-1.1.x86_64.qcow2"
+sums_url   = "https://download.fedoraproject.org/pub/fedora/linux/releases/42/Cloud/x86_64/images/Fedora-Cloud-42-1.1-x86_64-CHECKSUM"
+sums_type  = "sha256"
+mode       = "dhcp"
+mac        = "auto"
+memory_mb  = 2048
+vcpus      = 2
+
+[[vm]]
+name       = "centos-stream9"
+hostname   = "centos-stream9"
+os_variant = "centos-stream9"
+img_url    = "https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2"
+sums_url   = "https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2.SHA256SUM"
+sums_type  = "sha256"
+mode       = "dhcp"
+mac        = "auto"
+memory_mb  = 2048
+vcpus      = 2
+
+[[vm]]
+name       = "ubuntu24"
+hostname   = "ubuntu24"
+os_variant = "ubuntu24.04"
+img_url    = "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
+sums_url   = "https://cloud-images.ubuntu.com/noble/current/SHA256SUMS"
+sums_type  = "sha256"
+# mode       = "dhcp"
+# mac        = "52:54:00:aa:bb:cc"
+memory_mb  = 3072
+vcpus      = 2
+mode       = "static"
+mac        = "52:54:00:dd:ee:aa"
+ip         = "192.168.122.150"
+gw         = "192.168.122.1"
+xml        = [
+              "xpath.create=./memoryBacking",
+              "xpath.create=./memoryBacking/source",
+              "./memoryBacking/source/@type=memfd",
+              "xpath.create=./memoryBacking/access",
+              "./memoryBacking/access/@mode=shared"
+             ]
 
 userdata_yaml = """
 #cloud-config
