@@ -1,0 +1,12 @@
+[Unit]
+Description=Fix SELinux labels for vagrant home and ssh, then restart sshd
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/restorecon -RFv /home/vagrant /root /etc/ssh
+ExecStart=/usr/bin/systemctl try-restart sshd.service
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
