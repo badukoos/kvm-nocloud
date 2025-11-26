@@ -1,119 +1,120 @@
 # kvm-nocloud
 
-kvm-nocloud is a set of shell scripts for building KVM virtual machines using upstream cloud images, NoCloud cloud-init metadata, and optional Vagrant box packaging. Everything is implemented using standard tools like cloud-init, qemu-img, virt-install, and libvirt.
+kvm-nocloud is a set of shell scripts for building KVM virtual machines using upstream cloud images, NoCloud cloud-init metadata, and optional Vagrant box packaging. Everything is implemented using standard tools like cloud-init, qemu-img, virt-install, and libvirt with the exception of `dasel` used for yaml querying.
 
-The project keeps configuration simple by using a single inventory.toml file that defines VM settings, networking, cloud-init userdata, and optional XML modifications for libvirt.
+The project keeps configuration simple by using a single **inventory.yml** file that defines VM settings, networking, cloud-init userdata, and optional XML modifications for libvirt.
 
-The system is designed for fast rebuilds, deterministic VM definitions, and clean Vagrant integration without using full Packer builds.
+The system is designed for fast rebuilds, deterministic VM definitions, and Vagrant integration without using full Packer builds.
 
 ## Features
 
-- Build VMs from upstream cloud images
-- Optional creation of Vagrant libvirt boxes
-- Direct install into ~/.vagrant.d without producing a .box file
-- XML patching for advanced libvirt configuration
-- Per-VM cloud-init userdata overrides
+* Build VMs from upstream cloud images
+* Optional creation of Vagrant libvirt boxes
+* Direct install into ~/.vagrant.d without producing a .box file
+* XML patching for advanced libvirt configuration
+* Per-VM cloud-init userdata overrides
 
 ## Requirements
 
-- `kvm`
-- `libvirt`
-- `virt-install`
-- `qemu-img`
-- `cloud-localds`
+* `libvirt`
+* `virt-install`
+* `qemu-img`
+* `cloud-localds`
+* `dasel`
 
 ## Quick Start
 
-- Clone the repo
+* Clone the repo
 
 ```bash
 git clone git@github.com:badukoos/kvm-nocloud
-
 ```
-- Adjust inventory.toml
 
-`ssh_user`, `ssh_key` and `ssh_authorized_keys` in `userdata_yaml` at a minimum should be updated
+* Adjust `inventory.yml`
 
-- Build VM
+At minimum, update `ssh_authorized_keys` inside the default `userdata_yaml` block along with `ssh_user` and `ssh_key`
 
-```
+* Build VM
+
+```bash
 VM=debian12 ./vm.sh
 ```
 
-- Rebuild VM
+* Rebuild VM
 
-```
+```bash
 VM=debian12 REBUILD=1 ./vm.sh
 ```
 
-- Destroy VM
+* Destroy VM
 
-```
+```bash
 VM=debian12 DESTROY=1 ./vm.sh
 ```
 
-- Purge disks
+* Purge disks
 
-```
+```bash
 VM=debian12 DESTROY=1 PURGE_DISKS=1 ./vm.sh
 ```
-**Note:** Currently `inventory.toml` is populated with the official `debian12`, `fedora42`, `ubuntu24` and `centos-stream9` qcow2 files
+
+**Note:** The provided inventory contains upstream URLs for Debian 12, Fedora 42, Ubuntu 24, and CentOS Stream 9 cloud images.
 
 ## Networking
 
-- Static mode
+* Static mode
 
-```
-mode = "static"
-ip   = "192.168.122.150"
-gw   = "192.168.122.1"
+```yaml
+mode: "static"
+ip: "192.168.122.150"
+gw: "192.168.122.1"
 ```
 
-- DHCP mode
+* DHCP mode
 
-```
-mode = "dhcp"
+```yaml
+mode: "dhcp"
 ```
 
 Templates for networking live under `templates/`.
 
 ## Advanced options
 
-`inventory.toml` supports XML patch entries, for example if you want to enable shared memorybacking for virtio shares
+`inventory.yml` supports XML patch entries using simple YAML lists. Example enabling shared memory backing
 
-```
-xml = [
-  "xpath.create=./memoryBacking",
-  "xpath.create=./memoryBacking/source",
-  "./memoryBacking/source/@type=memfd",
-  "xpath.create=./memoryBacking/access",
-  "./memoryBacking/access/@mode=shared"
-]
+```yaml
+xml:
+  - "xpath.create=./memoryBacking"
+  - "xpath.create=./memoryBacking/source"
+  - "./memoryBacking/source/@type=memfd"
+  - "xpath.create=./memoryBacking/access"
+  - "./memoryBacking/access/@mode=shared"
 ```
 
 ## Vagrant Packaging
 
 To package a Vagrant box
 
-```
+```bash
 VM=debian12 VAGRANT_BOX=1 ./vm.sh
 ```
 
 Direct installation into `~/.vagrant.d`
 
-```
+```bash
 VM=debian12 VAGRANT_BOX=1 DIRECT_INSTALL=1 ./vm.sh
 ```
-**Note**: The default is `DIRECT_INSTALL=0` which means your vagrant box will reside in the `build/` folder and
-you have ti use `vagrant box add` manually
+
+**Note:** The default is `DIRECT_INSTALL=0`, meaning the box is created under `build/` and must be added manually via `vagrant box add`.
 
 ## SELinux Notes
 
-`templates/vagrant-selinux-fix.service` applies adjustments for Vagrant workflow on SELinux enabled hosts
+`templates/vagrant-selinux-fix.service` applies SELinux adjustments required by the Vagrant libvirt workflow.
 
 ## Gotchas
 
-- Many cloud images disable root login and password authentication. Ensure `ssh_authorized_keys` is set in userdata.
-- Some cloud images like Debian may not ship `qemu-guest-agent`
-- SELinux may block Vagrant unless vagrant-selinux-fix.service is applied
-- Set `KEEP_INSTANCE_ID=1`if rebuilds cause cloud-init to skip configuration.
+* Many cloud images disable root login and password authentication. Ensure `ssh_authorized_keys` is set.
+* Some cloud images may not ship `qemu-guest-agent`.
+* SELinux may block Vagrant unless the fix service is enabled.
+* If rebuilds cause cloud-init to skip applying userdata, set `KEEP_INSTANCE_ID=1`
+This ensures cloud-init treats rebuilds as the same instance and processes configuration accordingly.
