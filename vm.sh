@@ -5,6 +5,7 @@ VM="${VM:-}"
 IMAGES_DIR="${IMAGES_DIR:-/var/lib/libvirt/images/local}"
 SEED_IMG="${SEED_IMG:-${IMAGES_DIR}/${VM}-seed.img}"
 WAIT_SSH_SECS="${WAIT_SSH_SECS:-90}"
+INV="${INV:-inventory.yml}"
 umask 002
 
 DESTROY="${DESTROY:-0}"
@@ -16,58 +17,54 @@ FORCE_DS="${FORCE_DS:-0}"
 
 VAGRANT_BOX="${VAGRANT_BOX:-0}"
 BOX_NAME="${BOX_NAME:-$VM}"
-OUT_DIR="${OUT_DIR:-build}"
+OUT_DIR="${OUT_DIR:-build/boxes}"
 VAGRANTFILE_SNIPPET="${VAGRANTFILE_SNIPPET:-}"
 
-print_help() {
+usage() {
   cat <<EOF
 Usage:
-  VM=<name> [ENV=... ] ${0} [--vagrant-box]
+  VM=<name> [ENV=...] ${0}
 
 Description:
-  Build a libvirt VM defined in inventory.toml
-    - Downloads and verifies the base cloud image
-    - Generates a NoCloud seed image
-    - Boots the VM with virt-install
+  Build a libvirt VM defined in inventory.yml
 
 Environment flags:
-  VM                  Name of the VM entry in inventory.toml (vm[].name)
+  VM                  Name of the VM entry in inventory.yml
 
   DESTROY=1           Destroy and undefine the existing domain
   PURGE_DISKS=1       Used with DESTROY=1, also removes
                         - \${IMAGES_DIR}/\${VM}.qcow2
-                        - seed image i.eSEED_IMG
+                        - seed image i.e. \${SEED_IMG}
   REBUILD=1           Force re-download of the base image and recreate \${VM}.qcow2
   KEEP_INSTANCE_ID=1  Use a stable instance-id "\${VM}-stable" so cloud-init
                       treats rebuilds as the same instance
   SKIP_VERIFY=1       Skip checksum verification of the downloaded base image
   FORCE_DS=1          Add "ds=nocloud;s=/dev/vdb/" to qemu cmdline via virt-install
 
-
   IMAGES_DIR          Directory for base images and VM disks
                         Default: /var/lib/libvirt/images/local
   SEED_IMG            Path to the NoCloud seed image
                         Default: \${IMAGES_DIR}/\${VM}-seed.img
 
-
   WAIT_SSH_SECS       Seconds to wait for SSH to come up after boot
                         Default: 90
 
+  INV                 Path to inventory
+                        Default: inventory.yml
 
-  VIRT_XML            Extra --xml fragments to append, separated by ';'
+  VIRT_XML            Extra --xml fragments to append separated by ';'
                         Example:
                           VIRT_XML='cpu mode=host-passthrough;features acpi=off'
   VIRT_XML_FILE       Path to a file containing additional --xml lines
-                        Each non-empty, non-comment line becomes an --xml arg
+                        Each non-empty non-comment line becomes an --xml arg
 
 Vagrant options:
-  --vagrant-box       Package a libvirt .box from the prepared base image and exit
-  VAGRANT_BOX=1       Same as passing --vagrant-box
+  VAGRANT_BOX=1       Package a libvirt .box from the prepared base image and exit
 
   BOX_NAME            Vagrant box name
                         Default: \$VM
   OUT_DIR             Output directory for the .box
-                        Default: ./build
+                        Default: ./build/boxes
   VAGRANTFILE_SNIPPET Optional Vagrantfile snippet to embed inside the box
 
   DIRECT_INSTALL=1    Handled by scripts/vagrant.sh
@@ -76,23 +73,31 @@ Vagrant options:
                       instead of creating a .box archive.
 
   TARGET_SIZE_GB      Handled by scripts/vagrant.sh
-                      Target virtual disk size inGB when boxing
+                      Target virtual disk size in GB when boxing
                         Default: 20
-
 
   BOOTSTRAP_FILE      Path to the Vagrant bootstrap script used by vagrant.sh
                       Currently scripts/vagrant_bootstrap.sh
                         Default: <root_dir>/scripts/vagrant_bootstrap.sh
   TEMPLATES_DIR       Directory containing templates consumed by the bootstrap
-                        Default: <root_dir>/scripts/templates
-
+                        Default: <root_dir>/templates
 
   -h, --help          Show this help
 
 EOF
 }
-
-for a in "$@"; do case "$a" in -h|--help) print_help; exit 0;; --vagrant-box) VAGRANT_BOX=1 ;; esac; done
+for a in "$@"; do
+  case "$a" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument $a" >&2
+      exit 1
+      ;;
+  esac
+done
 
 info() {
   printf "\033[1;36mINFO:\033[0m %s\n" "$*"
@@ -110,11 +115,12 @@ requires() {
     exit 1
   fi
 }
-for t in python3 curl sha256sum sha512sum virsh virt-install cloud-localds; do
+
+for t in curl sha256sum sha512sum virsh virt-install cloud-localds dasel; do
   requires "$t"
 done
 
-[ -f inventory.toml ] || { echo "inventory.toml not found" >&2; exit 1; }
+[ -f "$INV" ] || { echo "inventory YAML not found: $INV" >&2; exit 1; }
 sudo mkdir -p "$IMAGES_DIR"
 CURL_FLAGS="--retry 3 --retry-delay 2 --retry-connrefused"
 
@@ -126,69 +132,91 @@ run_pretty() {
   return $rc
 }
 
-toml_get(){ python3 - "$1" <<'PY'
-import sys,json,tomllib
-expr=sys.argv[1]
-with open("inventory.toml","rb") as f: data=tomllib.load(f)
-def get(d,p):
-  cur=d
-  for part in p.split('.'):
-    if '[' in part and part.endswith(']'):
-      k,i=part[:-1].split('[',1); cur=(cur or {}).get(k,[]); cur=cur[int(i)]
-    else:
-      cur=(cur or {}).get(part)
-    if cur is None: return None
-  return cur
-print(json.dumps(get(data,expr)))
-PY
+yaml_expr_path() {
+  local expr="$1" part path="" key idx
+  IFS='.' read -r -a parts <<<"$expr"
+  for part in "${parts[@]}"; do
+    if [[ "$part" == *"["*"]" ]]; then
+      key="${part%%[*}"
+      idx="${part#*[}"
+      idx="${idx%]}"
+      if [ -n "$key" ]; then
+        path+="${path:+.}${key}.[${idx}]"
+      else
+        path+="${path:+.}[${idx}]"
+      fi
+    else
+      path+="${path:+.}${part}"
+    fi
+  done
+  printf '%s\n' "$path"
 }
 
-toml_get_str() {
-  v="$(toml_get "$1")"
-  if [ "$v" = "null" ]; then
+yaml_get() {
+  local expr="$1" path
+  path="$(yaml_expr_path "$expr")"
+  dasel -f "$INV" -r yaml "$path" 2>/dev/null || true
+}
+
+yaml_get_json() {
+  local expr="$1" path
+  path="$(yaml_expr_path "$expr")"
+  dasel -f "$INV" -r yaml -w json "$path" 2>/dev/null || true
+}
+
+yaml_get_str() {
+  local v
+  v="$(yaml_get "$1")"
+  if [ "$v" = "null" ] || [ -z "$v" ]; then
     echo ""
     return
   fi
-  echo "$v" | tr -d '"'
+  v="${v%\"}"
+  v="${v#\"}"
+  echo "$v"
 }
 
-toml_get_int() {
-  raw="$(toml_get "$1")"
+yaml_get_int() {
+  local raw def
+  raw="$(yaml_get "$1" | tr -d '"' | xargs || true)"
   def="${2:-}"
-  [ "$raw" = "null" ] && raw=""
-  raw="$(echo "$raw" | tr -d '"')"
-  echo "${raw:-$def}"
+  if [ -n "$raw" ]; then
+    echo "$raw"
+  else
+    echo "$def"
+  fi
 }
 
-vm_index() {
-  n=$(toml_get "vm" | python3 -c 'import sys, json; print(len(json.load(sys.stdin) or []))')
-  for i in $(seq 0 $((n - 1))); do
-    this=$(toml_get "vm[$i].name" | tr -d '"')
-    if [ "$this" = "$1" ]; then
+yaml_get_list() {
+  local expr="$1" path
+  path="$(yaml_expr_path "$expr")"
+  dasel -f "$INV" -r yaml -m "$path" 2>/dev/null || true
+}
+
+yaml_get_multiline() {
+  local expr="$1" json str
+  json="$(yaml_get_json "$expr")"
+  if [ -z "$json" ] || [ "$json" = "null" ]; then
+    return
+  fi
+  json="${json%\"}"
+  json="${json#\"}"
+  printf '%b\n' "$json"
+}
+
+yaml_vm_index() {
+  local name="$1"
+  local i=0 cur
+  while :; do
+    cur="$(dasel -f "$INV" -r yaml "vm.[${i}].name" 2>/dev/null | tr -d '"' | xargs)"
+    [ -z "$cur" ] && break
+    if [ "$cur" = "$name" ]; then
       echo "$i"
-      return
+      return 0
     fi
+    i=$((i+1))
   done
-}
-
-toml_get_list(){ python3 - "$1" <<'PY'
-import sys,json,tomllib
-expr=sys.argv[1]
-with open("inventory.toml","rb") as f: data=tomllib.load(f)
-def get(d,p):
-  cur=d
-  for part in p.split('.'):
-    if '[' in part and part.endswith(']'):
-      k,i=part[:-1].split('[',1); cur=(cur or {}).get(k,[]); cur=cur[int(i)]
-    else:
-      cur=(cur or {}).get(part)
-    if cur is None: return []
-  return cur if isinstance(cur,list) else []
-vals=get(data,expr)
-for v in vals:
-  if isinstance(v,str) and v.strip():
-    print(v.strip())
-PY
+  return 1
 }
 
 build_xml_args() {
@@ -196,11 +224,11 @@ build_xml_args() {
 
   while IFS= read -r line; do
     [ -n "$line" ] && XML_ARGS+=( --xml "$line" )
-  done < <(toml_get_list "defaults.xml")
+  done < <(yaml_get_list "defaults.xml")
 
   while IFS= read -r line; do
     [ -n "$line" ] && XML_ARGS+=( --xml "$line" )
-  done < <(toml_get_list "vm[$IDX].xml")
+  done < <(yaml_get_list "vm[$IDX].xml")
 
   if [ -n "${VIRT_XML:-}" ]; then
     while IFS= read -r line; do
@@ -217,52 +245,66 @@ build_xml_args() {
   fi
 }
 
-IDX="$(vm_index "$VM")" || true
-[ -n "$IDX" ] || error "No such virtual machine [$VM] in inventory.toml"
+[ -n "$VM" ] || error "VM not set (use VM=<name>)"
 
-HOSTNAME="$(toml_get_str "vm[$IDX].hostname")"; [ -n "$HOSTNAME" ] || HOSTNAME="$VM"
-OS_VARIANT="$(toml_get_str "vm[$IDX].os_variant")"; [ -n "$OS_VARIANT" ] || OS_VARIANT="$(toml_get_str defaults.os_variant)"; [ -n "$OS_VARIANT" ] || error "os_variant not defined for $VM and/or no defaults.os_variant found"
+IDX="$(yaml_vm_index "$VM")" || true
+[ -n "$IDX" ] || error "No such virtual machine [$VM] in $INV"
 
-NET_NAME="$(toml_get_str defaults.net)"; [ -n "$NET_NAME" ]
+HOSTNAME="$(yaml_get_str "vm[$IDX].hostname")"; [ -n "$HOSTNAME" ] || HOSTNAME="$VM"
+OS_VARIANT="$(yaml_get_str "vm[$IDX].os_variant")"
+[ -n "$OS_VARIANT" ] || OS_VARIANT="$(yaml_get_str defaults.os_variant)"
+[ -n "$OS_VARIANT" ] || error "os_variant not defined for $VM and/or no defaults.os_variant found"
+
+NET_NAME="$(yaml_get_str defaults.net)"; [ -n "$NET_NAME" ]
 virsh net-info "$NET_NAME" >/dev/null 2>&1 || error "libvirt network '$NET_NAME' not found"
 
-MEM="$(toml_get_int "vm[$IDX].memory_mb" "$(toml_get_int defaults.memory_mb 2048)")"
-VCPUS="$(toml_get_int "vm[$IDX].vcpus" "$(toml_get_int defaults.vcpus 2)")"
+MEM="$(yaml_get_int "vm[$IDX].memory_mb" "$(yaml_get_int defaults.memory_mb 2048)")"
+VCPUS="$(yaml_get_int "vm[$IDX].vcpus" "$(yaml_get_int defaults.vcpus 2)")"
 
-IMG_URL="$(toml_get_str "vm[$IDX].img_url")"; [ -n "$IMG_URL" ] || error "vm[$IDX].img_url not found"
+IMG_URL="$(yaml_get_str "vm[$IDX].img_url")"; [ -n "$IMG_URL" ] || error "vm[$IDX].img_url not found"
 IMG_NAME="$(basename -- "$IMG_URL")"
 BASE_IMG="${IMAGES_DIR}/${IMG_NAME}"
 
-SUMS_URL="$(toml_get_str "vm[$IDX].sums_url")"
-SUMS_TYPE="$(toml_get_str "vm[$IDX].sums_type")"; [ -n "$SUMS_TYPE" ] || SUMS_TYPE="auto"
+SUMS_URL="$(yaml_get_str "vm[$IDX].sums_url")"
+SUMS_TYPE="$(yaml_get_str "vm[$IDX].sums_type")"; [ -n "$SUMS_TYPE" ] || SUMS_TYPE="auto"
 
-MODE="$(toml_get_str "vm[$IDX].mode")"; [ -n "$MODE" ] || MODE="dhcp"
-MAC_ADDR="$(toml_get_str "vm[$IDX].mac")"
+MODE="$(yaml_get_str "vm[$IDX].mode")"; [ -n "$MODE" ] || MODE="dhcp"
+MAC_ADDR="$(yaml_get_str "vm[$IDX].mac")"
 
-STATIC_IP="$(toml_get_str "vm[$IDX].ip")"
-PREFIX="$(toml_get_int "vm[$IDX].prefix" "$(toml_get_int defaults.prefix 24)")"
-DNS_JSON="$(toml_get "vm[$IDX].dns")"; [ "$DNS_JSON" = "null" ] && DNS_JSON="$(toml_get defaults.dns)"
-DNS_LIST="$(echo "$DNS_JSON" | python3 -c 'import sys,json; a=json.load(sys.stdin); print(",".join(a) if a else "")')"
-GW="$(toml_get_str "vm[$IDX].gw")"
+STATIC_IP="$(yaml_get_str "vm[$IDX].ip")"
+PREFIX="$(yaml_get_int "vm[$IDX].prefix" "$(yaml_get_int defaults.prefix 24)")"
+
+DNS_LIST="$(yaml_get_list "vm[$IDX].dns")"
+if [ -z "$DNS_LIST" ]; then
+  DNS_LIST="$(yaml_get_list defaults.dns)"
+fi
+if [ -n "$DNS_LIST" ]; then
+  DNS_LIST="$(printf "%s\n" "$DNS_LIST" | paste -sd "," -)"
+fi
+
+GW="$(yaml_get_str "vm[$IDX].gw")"
 if [ "$MODE" = "static" ]; then
   [ -n "$STATIC_IP" ] || error "Static mode requires ip="
   [ -n "$GW" ] || GW="$(echo "$STATIC_IP" | awk -F. '{printf "%d.%d.%d.1",$1,$2,$3}')"
 fi
 
-SSH_USER="$(toml_get_str defaults.ssh_user)"; [ -n "$SSH_USER" ]
-SSH_KEY_PATH="$(toml_get_str defaults.ssh_key)"; [ -n "$SSH_KEY_PATH" ]
+SSH_USER="$(yaml_get_str defaults.ssh_user)"; [ -n "$SSH_USER" ]
+SSH_KEY_PATH="$(yaml_get_str defaults.ssh_key)"; [ -n "$SSH_KEY_PATH" ]
 [ -r "$SSH_KEY_PATH" ] || error "SSH key not readable $SSH_KEY_PATH"
 SSH_PUB="$(cat "$SSH_KEY_PATH".pub 2>/dev/null || ssh-keygen -y -f "$SSH_KEY_PATH" 2>/dev/null || true)"
 [ -n "$SSH_PUB" ] || error "Could not obtain public key from $SSH_KEY_PATH.pub"
 
 if [ "$DESTROY" = "1" ]; then
-  info "Destroying domain"; ( virsh destroy "$VM" >/dev/null 2>&1 ) || true
-  info "Undefining domain"; ( virsh undefine "$VM" --nvram >/dev/null 2>&1 ) || true
+  info "Destroying domain"
+  ( virsh destroy "$VM" >/dev/null 2>&1 ) || true
+  info "Undefining domain"
+  ( virsh undefine "$VM" --nvram >/dev/null 2>&1 ) || true
   if [ "$PURGE_DISKS" = "1" ]; then
     info "Purging VM disks & seed"
     sudo rm -f "${IMAGES_DIR}/${VM}.qcow2" "$SEED_IMG" >/dev/null 2>&1 || true
   fi
-  info "Done"; exit 0
+  info "Done"
+  exit 0
 fi
 
 verify_image() {
@@ -376,13 +418,14 @@ if [ "$VAGRANT_BOX" = "1" ]; then
   info "Packaging Vagrant box from $BASE_IMG"
   [ -x "./scripts/vagrant.sh" ] || error "vagrant.sh not found or not executable"
 
-  : "${BOOTSTRAP_FILE:=$(cd "$(dirname "$0")" && pwd -P)/scripts/vagrant_bootstrap.sh}"
-  : "${TEMPLATES_DIR:=$(cd "$(dirname "$0")" && pwd -P)/templates}"
+  ROOT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+  : "${BOOTSTRAP_FILE:=${ROOT_DIR}/scripts/vagrant_bootstrap.sh}"
+  : "${TEMPLATES_DIR:=${ROOT_DIR}/templates}"
 
-  BOX_NAME="${BOX_NAME:-$VM}" \
+  BOX_NAME="$BOX_NAME" \
   SRC_IMG="$BASE_IMG" \
   PROVIDER="libvirt" \
-  OUT_DIR="${OUT_DIR:-build}" \
+  OUT_DIR="$OUT_DIR" \
   BAKE_VAGRANT="${BAKE_VAGRANT:-0}" \
   VAGRANTFILE_SNIPPET="${VAGRANTFILE_SNIPPET:-}" \
   BOOTSTRAP_FILE="$BOOTSTRAP_FILE" \
@@ -411,14 +454,18 @@ else
   info "Disk already exists at $VM_DISK"
 fi
 
-INSTANCE_ID="${VM}-$(date -u +%Y%m%dT%H%M%SZ)"; [ "$KEEP_INSTANCE_ID" = "1" ] && INSTANCE_ID="${VM}-stable"
+INSTANCE_ID="${VM}-$(date -u +%Y%m%dT%H%M%SZ)"
+[ "$KEEP_INSTANCE_ID" = "1" ] && INSTANCE_ID="${VM}-stable"
+
 META_FILE="$(mktemp)"
 cat >"$META_FILE" <<EOF
 instance-id: ${INSTANCE_ID}
 local-hostname: ${HOSTNAME}
 EOF
 
-emit_net=0; NET_FILE=""
+emit_net=0
+NET_FILE=""
+
 if [ "$MODE" = "static" ]; then
   [ -n "$MAC_ADDR" ] && [ "$MAC_ADDR" != "auto" ] || error "static mode requires a pinned MAC"
   NET_FILE="$(mktemp)"
@@ -449,12 +496,12 @@ fi
 
 USER_FILE="$(mktemp)"
 BOUND="BOUNDARY-$(date +%s%N)"
-DEF_YAML="$(toml_get "defaults.userdata_yaml" | python3 -c 'import sys,json; t=json.load(sys.stdin); print(t if isinstance(t,str) else "")')"
-VM_YAML="$(toml_get "vm[$IDX].userdata_yaml" | python3 -c 'import sys,json; t=json.load(sys.stdin); print(t if isinstance(t,str) else "")')"
+
+DEF_YAML="$(yaml_get_multiline defaults.userdata_yaml)"
+VM_YAML="$(yaml_get_multiline "vm[$IDX].userdata_yaml")"
 
 if [ -z "$DEF_YAML" ] && [ -z "$VM_YAML" ]; then
-  error "No cloud-config found. Define [defaults].userdata_yaml and/or [[vm]].userdata_yaml in inventory.toml" >&2
-  exit 2
+  error "No cloud-config found in $INV"
 fi
 
 {
@@ -551,5 +598,4 @@ if [ "$ok" = "1" ]; then
   info "Setup complete"
 else
   error "SSH did not come up in time"
-  exit 2
 fi
