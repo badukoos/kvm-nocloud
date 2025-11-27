@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+ROOT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+
 VM="${VM:-}"
 IMAGES_DIR="${IMAGES_DIR:-/var/lib/libvirt/images/local}"
 SEED_IMG="${SEED_IMG:-${IMAGES_DIR}/${VM}-seed.img}"
 WAIT_SSH_SECS="${WAIT_SSH_SECS:-90}"
-INV="${INV:-inventory.yml}"
+INV="${INV:-${ROOT_DIR}/inventory.yml}"
 umask 002
 
 DESTROY="${DESTROY:-0}"
@@ -17,7 +19,7 @@ FORCE_DS="${FORCE_DS:-0}"
 
 VAGRANT_BOX="${VAGRANT_BOX:-0}"
 BOX_NAME="${BOX_NAME:-$VM}"
-OUT_DIR="${OUT_DIR:-build/boxes}"
+OUT_DIR="${OUT_DIR:-${ROOT_DIR}/build/boxes}"
 VAGRANTFILE_SNIPPET="${VAGRANTFILE_SNIPPET:-}"
 
 usage() {
@@ -50,7 +52,7 @@ Environment flags:
                         Default: 90
 
   INV                 Path to inventory
-                        Default: inventory.yml
+                        Default: <root_dir>/inventory.yml
 
   VIRT_XML            Extra --xml fragments to append separated by ';'
                         Example:
@@ -64,7 +66,7 @@ Vagrant options:
   BOX_NAME            Vagrant box name
                         Default: \$VM
   OUT_DIR             Output directory for the .box
-                        Default: ./build/boxes
+                        Default: <root_dir>/build/boxes
   VAGRANTFILE_SNIPPET Optional Vagrantfile snippet to embed inside the box
 
   DIRECT_INSTALL=1    Handled by scripts/vagrant.sh
@@ -416,9 +418,8 @@ fi
 
 if [ "$VAGRANT_BOX" = "1" ]; then
   info "Packaging Vagrant box from $BASE_IMG"
-  [ -x "./scripts/vagrant.sh" ] || error "vagrant.sh not found or not executable"
+  [ -x "${ROOT_DIR}/scripts/vagrant.sh" ] || error "vagrant.sh not found or not executable"
 
-  ROOT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
   : "${BOOTSTRAP_FILE:=${ROOT_DIR}/scripts/vagrant_bootstrap.sh}"
   : "${TEMPLATES_DIR:=${ROOT_DIR}/templates}"
 
@@ -430,7 +431,7 @@ if [ "$VAGRANT_BOX" = "1" ]; then
   VAGRANTFILE_SNIPPET="${VAGRANTFILE_SNIPPET:-}" \
   BOOTSTRAP_FILE="$BOOTSTRAP_FILE" \
   TEMPLATES_DIR="$TEMPLATES_DIR" \
-  ./scripts/vagrant.sh
+  "${ROOT_DIR}/scripts/vagrant.sh"
 
   info "Box created. Done."
   exit 0
