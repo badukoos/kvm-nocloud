@@ -190,9 +190,18 @@ yaml_get_int() {
 }
 
 yaml_get_list() {
-  local expr="$1" path
-  path="$(yaml_expr_path "$expr")"
-  dasel -f "$INV" -r yaml -m "$path" 2>/dev/null || true
+  local expr="$1" json
+  json="$(yaml_get_json "$expr")"
+  if [ -z "$json" ] || [ "$json" = "null" ]; then
+    return
+  fi
+  json="${json#[}"
+  json="${json%]}"
+  printf '%s\n' "$json" \
+    | tr ',' '\n' \
+    | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
+    | sed 's/^"//; s/"$//' \
+    | sed '/^$/d'
 }
 
 yaml_get_multiline() {
@@ -282,6 +291,11 @@ if [ -z "$DNS_LIST" ]; then
 fi
 if [ -n "$DNS_LIST" ]; then
   DNS_LIST="$(printf "%s\n" "$DNS_LIST" | paste -sd "," -)"
+fi
+
+DNS_CFG=""
+if [ -n "$DNS_LIST" ]; then
+  DNS_CFG="$("${ROOT_DIR}/scripts/config_dns.sh" "$OS_VARIANT" "$DNS_LIST" || true)"
 fi
 
 GW="$(yaml_get_str "vm[$IDX].gw")"
@@ -501,7 +515,7 @@ BOUND="BOUNDARY-$(date +%s%N)"
 DEF_YAML="$(yaml_get_multiline defaults.userdata_yaml)"
 VM_YAML="$(yaml_get_multiline "vm[$IDX].userdata_yaml")"
 
-if [ -z "$DEF_YAML" ] && [ -z "$VM_YAML" ]; then
+if [ -z "$DEF_YAML" ] && [ -z "$VM_YAML" ] && [ -z "$DNS_CFG" ]; then
   error "No cloud-config found in $INV"
 fi
 
@@ -520,6 +534,12 @@ fi
     echo "Content-Type: text/cloud-config"
     echo
     printf "%s\n" "$VM_YAML"
+  fi
+  if [ -n "$DNS_CFG" ] ; then
+    echo "--$BOUND"
+    echo "Content-Type: text/cloud-config"
+    echo
+    printf "%s\n" "$DNS_CFG"
   fi
   echo "--$BOUND--"
 } > "$USER_FILE"
