@@ -16,15 +16,26 @@ defaults:
         sudo: ALL=(ALL) NOPASSWD:ALL
         groups: [sudo]
         shell: /bin/bash
+        lock_passwd: true
         ssh_authorized_keys:
           - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMuAaIClutm9QpUX54UrCOwn9b1hD6K8CdVxQoeIVKVo kvm-user@lab.local
+
     ssh_pwauth: false
     disable_root: true
     package_update: true
     packages:
       - openssh-server
+
+    write_files:
+      - path: /etc/gai.conf
+        permissions: "0644"
+        owner: root:root
+        content: |
+          precedence ::ffff:0:0/96  100
+          precedence ::/0           40
+
     runcmd:
-      - systemctl enable ssh --now || systemctl enable sshd --now || true
+      - [ sh, -c, 'systemctl enable ssh --now || systemctl enable sshd --now || true' ]
 
 vm:
   - name: debian12
@@ -34,9 +45,8 @@ vm:
     sums_url: https://cloud.debian.org/images/cloud/bookworm/latest/SHA512SUMS
     sums_type: sha512
     mode: static
-    ip: 192.168.122.101
-    gw: 192.168.122.1
-    mac: 52:54:00:99:99:99
+    mode: dhcp
+    mac: auto
     userdata_yaml: |
       #cloud-config
       packages:
@@ -54,7 +64,6 @@ vm:
     mac: auto
     memory_mb: 2048
     vcpus: 2
-    file_url: file:///var/snap/multipass/common/cache/multipassd/vault/images/fedora42/Fedora-Cloud-Base-Generic-42-1.1.x86_64.qcow2
 
   - name: centos-stream9
     hostname: centos-stream9
@@ -62,8 +71,10 @@ vm:
     img_url: https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2
     sums_url: https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2.SHA256SUM
     sums_type: sha256
-    mode: dhcp
-    mac: auto
+    mode: static
+    mac: 52:54:00:aa:bb:cc
+    ip: 192.168.122.101
+    gw: 192.168.122.1
     memory_mb: 2048
     vcpus: 2
 
@@ -76,8 +87,8 @@ vm:
     memory_mb: 3072
     vcpus: 2
     mode: static
-    mac: 52:54:00:dd:ee:aa
-    ip: 192.168.122.150
+    mac: 52:54:00:ab:cd:ef
+    ip: 192.168.122.102
     gw: 192.168.122.1
     xml:
       - xpath.create=./memoryBacking
