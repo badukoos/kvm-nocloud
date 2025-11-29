@@ -11,7 +11,7 @@ fi
 IFS=',' read -r -a dns_arr <<<"$dns_csv"
 
 case "$os_variant" in
-fedora*|rhel*|centos*)
+centos*|fedora*|rhel*)
   cat <<EOF
 #cloud-config
 write_files:
@@ -26,7 +26,7 @@ runcmd:
   - [ sh, -c, 'systemctl restart systemd-resolved || true' ]
 EOF
   ;;
-  ubuntu*|debian*)
+  debian*|ubuntu*)
     cat <<EOF
 #cloud-config
 manage_resolv_conf: true
@@ -42,7 +42,7 @@ runcmd:
   - [ sh, -c, 'systemctl disable --now systemd-resolved 2>/dev/null || true; rm -f /etc/resolv.conf' ]
   - |
     cat > /etc/resolv.conf << 'EOF_RESOLV'
-$(for ip in "${dns_arr[@]}"; do printf "      nameserver %s\n" "$ip"; done)
+$(for ip in "${dns_arr[@]}"; do printf "    nameserver %s\n" "$ip"; done)
 EOF
     ;;
 esac
