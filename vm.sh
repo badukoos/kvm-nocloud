@@ -134,47 +134,23 @@ run_pretty() {
   return $rc
 }
 
-yaml_expr_path() {
-  local expr="$1" part path="" key idx
-  IFS='.' read -r -a parts <<<"$expr"
-  for part in "${parts[@]}"; do
-    if [[ "$part" == *"["*"]" ]]; then
-      key="${part%%[*}"
-      idx="${part#*[}"
-      idx="${idx%]}"
-      if [ -n "$key" ]; then
-        path+="${path:+.}${key}.[${idx}]"
-      else
-        path+="${path:+.}[${idx}]"
-      fi
-    else
-      path+="${path:+.}${part}"
-    fi
-  done
-  printf '%s\n' "$path"
-}
-
 yaml_get() {
-  local expr="$1" path
-  path="$(yaml_expr_path "$expr")"
-  dasel -f "$INV" -r yaml "$path" 2>/dev/null || true
+  local expr="$1"
+  yq -r ".${expr}" "$INV" 2>/dev/null || true
 }
 
 yaml_get_json() {
-  local expr="$1" path
-  path="$(yaml_expr_path "$expr")"
-  dasel -f "$INV" -r yaml -w json "$path" 2>/dev/null || true
+  local expr="$1"
+  yq -o=json ".${expr}" "$INV" 2>/dev/null || true
 }
 
 yaml_get_str() {
   local v
   v="$(yaml_get "$1")"
-  if [ "$v" = "null" ] || [ -z "$v" ]; then
+  if [ -z "$v" ] || [ "$v" = "null" ]; then
     echo ""
     return
   fi
-  v="${v%\"}"
-  v="${v#\"}"
   echo "$v"
 }
 
@@ -182,47 +158,36 @@ yaml_get_int() {
   local raw def
   raw="$(yaml_get "$1" | tr -d '"' | xargs || true)"
   def="${2:-}"
-  if [ -n "$raw" ]; then
-    echo "$raw"
+  if [ -n "$raw" ] && [ "$raw" != "null" ] && [[ "$raw" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$raw"
   else
-    echo "$def"
+    printf '%s\n' "$def"
   fi
 }
 
 yaml_get_list() {
-  local expr="$1" json
-  json="$(yaml_get_json "$expr")"
-  if [ -z "$json" ] || [ "$json" = "null" ]; then
-    return
-  fi
-  json="${json#[}"
-  json="${json%]}"
-  printf '%s\n' "$json" \
-    | tr ',' '\n' \
-    | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
-    | sed 's/^"//; s/"$//' \
-    | sed '/^$/d'
+  local expr="$1"
+  yq -r ".${expr}[]" "$INV" 2>/dev/null \
+    | sed '/^null$/d' \
+    || true
 }
 
 yaml_get_multiline() {
-  local expr="$1" json str
-  json="$(yaml_get_json "$expr")"
-  if [ -z "$json" ] || [ "$json" = "null" ]; then
-    return
-  fi
-  json="${json%\"}"
-  json="${json#\"}"
-  printf '%b\n' "$json"
+  local expr="$1" v
+  v="$(yaml_get "$expr")"
+  [ -z "$v" ] || [ "$v" = "null" ] && return 0
+  printf '%s\n' "$v"
 }
 
 yaml_vm_index() {
   local name="$1"
   local i=0 cur
   while :; do
-    cur="$(dasel -f "$INV" -r yaml "vm.[${i}].name" 2>/dev/null | tr -d '"' | xargs)"
+    cur="$(yq -r ".vm[$i].name // \"\"" "$INV" 2>/dev/null || true)"
     [ -z "$cur" ] && break
+    cur="$(echo "$cur" | xargs)"
     if [ "$cur" = "$name" ]; then
-      echo "$i"
+      printf '%s\n' "$i"
       return 0
     fi
     i=$((i+1))
