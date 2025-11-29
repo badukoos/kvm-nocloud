@@ -43,13 +43,13 @@ svc_enable qemu-guest-agent ; svc_start qemu-guest-agent || true
 case "$ID" in
   ubuntu)
     mkdir -p /etc/netplan
-    cp /root/templates/netplan-dhcp.yaml /etc/netplan/99-vagrant-dhcp.yaml
+    cp /root/templates/vagrant-netplan-dhcp.yaml /etc/netplan/99-vagrant-dhcp.yaml
     (command -v netplan >/dev/null 2>&1 && netplan generate || true)
     ;;
   debian)
     if [ -d /etc/systemd/network ]; then
       mkdir -p /etc/systemd/network
-      cp /root/templates/systemd-networkd-dhcp.network /etc/systemd/network/99-vagrant.network
+      cp /root/templates/vagrant-systemd-networkd-dhcp.network /etc/systemd/network/99-vagrant.network
       svc_enable systemd-networkd || true
     fi
     ;;
