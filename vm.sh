@@ -56,7 +56,7 @@ Environment flags:
 
   VIRT_XML            Extra --xml fragments to append separated by ';'
                         Example:
-                          VIRT_XML='cpu mode=host-passthrough;features acpi=off'
+                          VIRT_XML='cpu mode=host-passthrough;features pmu=on'
   VIRT_XML_FILE       Path to a file containing additional --xml lines
                         Each non-empty non-comment line becomes an --xml arg
 
@@ -389,7 +389,7 @@ if [ "$need_download" = "0" ]; then
       need_download=0
     else
       case "$?" in
-        1) warn "Checksum mismatch; will download"; need_download=1 ;;
+        1) warn "Checksum mismatch, re-downloading image"; need_download=1 ;;
         2) warn "No matching checksum or unrecognized SUMS, skipping download";
            [ -f "$TMP_DL" ] && sudo rm -f "$TMP_DL"
            need_download=0 ;;
