@@ -1,6 +1,6 @@
 # kvm-nocloud
 
-kvm-nocloud is a set of shell scripts for building KVM virtual machines using upstream cloud images, NoCloud cloud-init metadata, and optional Vagrant box packaging. Everything is implemented using standard tools like cloud-init, qemu-img, virt-install, and libvirt with the exception of `dasel` used for yaml querying.
+kvm-nocloud is a set of shell scripts for building KVM virtual machines using upstream cloud images, NoCloud cloud-init metadata, and optional Vagrant box packaging. Everything is implemented using standard tools like cloud-init, qemu-img, virt-install, libvirt and yq.
 
 The project keeps configuration simple by using a single **inventory.yml** file that defines VM settings, networking, cloud-init userdata, and optional XML modifications for libvirt.
 
@@ -20,7 +20,7 @@ The system is designed for fast rebuilds, deterministic VM definitions, and Vagr
 * `virt-install`
 * `qemu-img`
 * `cloud-localds`
-* `dasel`
+* `yq`
 
 ## Quick Start
 
@@ -75,8 +75,6 @@ gw: "192.168.122.1"
 ```yaml
 mode: "dhcp"
 ```
-
-Templates for networking live under `templates/`.
 
 ## Advanced options
 
