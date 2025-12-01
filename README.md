@@ -1,6 +1,6 @@
 # kvm-nocloud
 
-kvm-nocloud is a set of shell scripts for building KVM virtual machines using upstream cloud images, NoCloud cloud-init metadata, and optional Vagrant box packaging. Everything is implemented using standard tools like cloud-init, qemu-img, virt-install, libvirt and yq.
+kvm-nocloud is a set of shell scripts for building KVM virtual machines using upstream cloud images, NoCloud cloud-init metadata, and optional Vagrant box packaging. Everything is implemented using standard tools like qemu-img, virt-install, libvirt and yq.
 
 The project keeps configuration simple by using a single **inventory.yml** file that defines VM settings, networking, cloud-init userdata, and optional XML modifications for libvirt.
 
@@ -76,7 +76,7 @@ gw: "192.168.122.1"
 mode: "dhcp"
 ```
 
-## Advanced options
+## Advanced Options
 
 `inventory.yml` supports XML patch entries using simple YAML lists. Example enabling shared memory backing
 
@@ -103,16 +103,47 @@ Direct installation into `~/.vagrant.d`
 VM=debian12 VAGRANT_BOX=1 DIRECT_INSTALL=1 ./vm.sh
 ```
 
-**Note:** The default is `DIRECT_INSTALL=0`, meaning the box is created under `build/` and must be added manually via `vagrant box add`.
+**Notes:**
+* The default is `DIRECT_INSTALL=0`, meaning the box is created under `build/` and must be added manually via `vagrant box add`
+* `templates/vagrant-selinux-fix.service` applies SELinux adjustments required by the Vagrant libvirt workflow.
+* Vagrant packaging option is completely separate from cloud-init workflow and does not have anything to do with it.
 
-## SELinux Notes
+## Troubleshooting
 
-`templates/vagrant-selinux-fix.service` applies SELinux adjustments required by the Vagrant libvirt workflow.
+| Command | Description |
+|--------|-------------|
+| `sudo cloud-init status` | Check `cloud-init` status. Tack `--long` for extended info, tack `--wait` to wait until initialization is complete |
+| `sudo cloud-init query ds` | Check `cloud-init` datasource |
+| `sudo tail -n 100 /var/log/cloud-init.log` <br> `sudo tail -n 100 /var/log/cloud-init.log` | View `cloud-init` logs |
+| `sudo cloud-init query userdata` | See parsed `cloud-init` merged user-data |
+| `sudo cloud-init analyze show` <br> `sudo cloud-init analyze blame` | Analyze `cloud-init` stage execution times and performance bottlenecks |
 
-## Gotchas
+To inspect VM logs directly from the host using the virt-* tools
 
-* Many cloud images disable root login and password authentication. Ensure `ssh_authorized_keys` is set.
-* Some cloud images may not ship `qemu-guest-agent`.
-* SELinux may block Vagrant unless the fix service is enabled.
-* If rebuilds cause cloud-init to skip applying userdata, set `KEEP_INSTANCE_ID=1`
-This ensures cloud-init treats rebuilds as the same instance and processes configuration accordingly.
+```bash
+export LIBGUESTFS_BACKEND=direct
+
+virt-cat -d <vm> /var/log/cloud-init.log | tail -n100
+
+virt-cat -d <vm> /var/log/cloud-init-output.log | tail -n100
+```
+To run commands under sudo, preserve the backend selection like
+```bash
+sudo --preserve-env=LIBGUESTFS_BACKEND virt-cat -d <vm> /var/log/cloud-init.log
+```
+Alternatively, VM filesystem can be mounted using `guestmount`
+
+```bash
+export LIBGUESTFS_BACKEND=direct
+
+sudo mkdir -p /mnt/<vm>
+sudo rm -rf /mnt/<vm>/*
+
+sudo --preserve-env=LIBGUESTFS_BACKEND \
+  guestmount -d <vm> -i --ro /mnt/<vm>
+
+sudo tail -n50 /mnt/<vm>/var/log/cloud-init.log
+sudo tail -n50 /mnt/<vm>/var/log/cloud-init-output.log
+
+sudo guestunmount /mnt/<vm>
+```
