@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 002
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 
@@ -8,7 +9,6 @@ IMAGES_DIR="${IMAGES_DIR:-/var/lib/libvirt/images/local}"
 SEED_IMG="${SEED_IMG:-${IMAGES_DIR}/${VM}-seed.img}"
 WAIT_SSH_SECS="${WAIT_SSH_SECS:-90}"
 INV="${INV:-${ROOT_DIR}/inventory.yml}"
-umask 002
 
 DESTROY="${DESTROY:-0}"
 PURGE_DISKS="${PURGE_DISKS:-0}"
@@ -22,116 +22,79 @@ BOX_NAME="${BOX_NAME:-$VM}"
 OUT_DIR="${OUT_DIR:-${ROOT_DIR}/build/boxes}"
 VAGRANTFILE_SNIPPET="${VAGRANTFILE_SNIPPET:-}"
 
+VM_ARG=""
+
 usage() {
   cat <<EOF
 Usage:
-  VM=<name> [ENV=...] ${0}
+  ${0} [flags] <vm>
+  VM=<vm> [ENV=...] ${0} [flags]
 
-Description:
-  Build a libvirt VM defined in inventory.yml
+Flags:
+  --destroy            DESTROY=1
+  --purge-disks        PURGE_DISKS=1, used with --destroy
+  --rebuild            REBUILD=1
+  --keep-instance-id   KEEP_INSTANCE_ID=1
+  --skip-verify        SKIP_VERIFY=1
+  --force-ds           FORCE_DS=1
+  --vagrant-box        VAGRANT_BOX=1
+  -h, --help           Show this help
 
-Environment flags:
+Env options:
   VM                  Name of the VM entry in inventory.yml
 
   DESTROY=1           Destroy and undefine the existing domain
-  PURGE_DISKS=1       Used with DESTROY=1, also removes
-                        - \${IMAGES_DIR}/\${VM}.qcow2
-                        - seed image i.e. \${SEED_IMG}
+  PURGE_DISKS=1       Used with DESTROY=1. Also removes qcow2 and seed image
   REBUILD=1           Force re-download of the base image and recreate \${VM}.qcow2
   KEEP_INSTANCE_ID=1  Use a stable instance-id "\${VM}-stable" so cloud-init
                       treats rebuilds as the same instance
   SKIP_VERIFY=1       Skip checksum verification of the downloaded base image
   FORCE_DS=1          Add "ds=nocloud;s=/dev/vdb/" to qemu cmdline via virt-install
 
-  IMAGES_DIR          Directory for base images and VM disks
-                        Default: /var/lib/libvirt/images/local
-  SEED_IMG            Path to the NoCloud seed image
-                        Default: \${IMAGES_DIR}/\${VM}-seed.img
-
-  WAIT_SSH_SECS       Seconds to wait for SSH to come up after boot
-                        Default: 90
-
-  INV                 Path to inventory
-                        Default: <root_dir>/inventory.yml
-
-  VIRT_XML            Extra --xml fragments to append separated by ';'
-                        Example:
-                          VIRT_XML='cpu mode=host-passthrough;features pmu=on'
-  VIRT_XML_FILE       Path to a file containing additional --xml lines
-                        Each non-empty non-comment line becomes an --xml arg
-
-Vagrant options:
   VAGRANT_BOX=1       Package a libvirt .box from the prepared base image and exit
-
-  BOX_NAME            Vagrant box name
-                        Default: \$VM
-  OUT_DIR             Output directory for the .box
-                        Default: <root_dir>/build/boxes
-  VAGRANTFILE_SNIPPET Optional Vagrantfile snippet to embed inside the box
-
-  DIRECT_INSTALL=1    Handled by scripts/vagrant.sh
-                      Install directly into:
-                        ~/.vagrant.d/boxes/localhost-VAGRANTSLASH-\${BOX_NAME}/0/libvirt
-                      instead of creating a .box archive.
-
-  TARGET_SIZE_GB      Handled by scripts/vagrant.sh
-                      Target virtual disk size in GB when boxing
-                        Default: 20
-
-  BOOTSTRAP_FILE      Path to the Vagrant bootstrap script used by vagrant.sh
-                      Currently scripts/vagrant_bootstrap.sh
-                        Default: <root_dir>/scripts/vagrant_bootstrap.sh
-  TEMPLATES_DIR       Directory containing templates consumed by the bootstrap
-                        Default: <root_dir>/templates
-
-  -h, --help          Show this help
+  DIRECT_INSTALL=1    Directly install vagrant box without creating a box file
 
 EOF
 }
-for a in "$@"; do
-  case "$a" in
+
+while [ $# -gt 0 ]; do
+  case "$1" in
     -h|--help)
       usage
       exit 0
       ;;
-    *)
-      echo "Unknown argument $a" >&2
+    --destroy)          DESTROY=1; shift ;;
+    --purge-disks)      PURGE_DISKS=1; shift ;;
+    --rebuild)          REBUILD=1; shift ;;
+    --keep-instance-id) KEEP_INSTANCE_ID=1; shift ;;
+    --skip-verify)      SKIP_VERIFY=1; shift ;;
+    --force-ds)         FORCE_DS=1; shift ;;
+    --vagrant-box)      VAGRANT_BOX=1; shift ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
       exit 1
+      ;;
+    *)
+      if [ -n "$VM_ARG" ]; then
+        echo "Unexpected extra argument: $1" >&2
+        exit 1
+      fi
+      VM_ARG="$1"
+      shift
       ;;
   esac
 done
-
-info() {
-  printf "\033[1;36mINFO:\033[0m %s\n" "$*"
-}
-warn() {
-  printf "\033[1;33mWARN:\033[0m %s\n" "$*" >&2
-}
-error() {
-  printf "\033[1;31mERROR:\033[0m %s\n" "$*" >&2
-  exit 1
-}
-requires() {
-  if ! command -v "$1" >/dev/null 2>&1; then
-    echo "missing tool: $1" >&2
-    exit 1
-  fi
-}
-
-for t in curl sha256sum sha512sum virsh virt-install cloud-localds dasel; do
-  requires "$t"
-done
-
-[ -f "$INV" ] || { echo "inventory YAML not found: $INV" >&2; exit 1; }
-sudo mkdir -p "$IMAGES_DIR"
-CURL_FLAGS="--retry 3 --retry-delay 2 --retry-connrefused"
 
 run_pretty() {
   set +e
   stdbuf -oL -eL "$@" 2>&1 | awk 'NF'
   rc=${PIPESTATUS[0]}
   set -e
-  return $rc
+  return "$rc"
 }
 
 yaml_get() {
@@ -190,10 +153,20 @@ yaml_vm_index() {
       printf '%s\n' "$i"
       return 0
     fi
-    i=$((i+1))
+    i=$((i + 1))
   done
   return 1
 }
+
+[ -n "${VM_ARG:-}" ] && VM="$VM_ARG"
+
+if [ -z "${SEED_IMG:-}" ]; then
+  SEED_IMG="${IMAGES_DIR}/${VM}-seed.img"
+fi
+
+if [ -z "${BOX_NAME:-}" ]; then
+  BOX_NAME=${VM}
+fi
 
 build_xml_args() {
   XML_ARGS=()
@@ -208,43 +181,81 @@ build_xml_args() {
 
   if [ -n "${VIRT_XML:-}" ]; then
     while IFS= read -r line; do
-      line="${line%%#*}"; line="$(printf '%s' "$line" | xargs)"
+      line="${line%%#*}"
+      line="$(printf '%s' "$line" | xargs)"
       [ -n "$line" ] && XML_ARGS+=( --xml "$line" )
     done < <(printf '%s\n' "$VIRT_XML" | tr ';' '\n')
   fi
 
   if [ -n "${VIRT_XML_FILE:-}" ] && [ -r "$VIRT_XML_FILE" ]; then
     while IFS= read -r line; do
-      line="${line%%#*}"; line="$(printf '%s' "$line" | xargs)"
+      line="${line%%#*}"
+      line="$(printf '%s' "$line" | xargs)"
       [ -n "$line" ] && XML_ARGS+=( --xml "$line" )
     done < "$VIRT_XML_FILE"
   fi
 }
 
-[ -n "$VM" ] || error "VM not set (use VM=<name>)"
+info() {
+  printf "\033[1;36mINFO:\033[0m %s\n" "$*"
+}
+
+warn() {
+  printf "\033[1;33mWARN:\033[0m %s\n" "$*" >&2
+}
+
+error() {
+  printf "\033[1;31mERROR:\033[0m %s\n" "$*" >&2
+  exit 1
+}
+
+requires() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "missing tool: $1" >&2
+    exit 1
+  fi
+}
+
+for t in curl sha256sum sha512sum virsh virt-install cloud-localds yq; do
+  requires "$t"
+done
+
+[ -f "$INV" ] || { echo "inventory YAML not found: $INV" >&2; exit 1; }
+
+sudo mkdir -p "$IMAGES_DIR"
+CURL_FLAGS="--retry 3 --retry-delay 2 --retry-connrefused"
+
+[ -n "$VM" ] || error "VM not set, use VM=<name>"
 
 IDX="$(yaml_vm_index "$VM")" || true
 [ -n "$IDX" ] || error "No such virtual machine [$VM] in $INV"
 
-HOSTNAME="$(yaml_get_str "vm[$IDX].hostname")"; [ -n "$HOSTNAME" ] || HOSTNAME="$VM"
+HOSTNAME="$(yaml_get_str "vm[$IDX].hostname")"
+[ -n "$HOSTNAME" ] || HOSTNAME="$VM"
+
 OS_VARIANT="$(yaml_get_str "vm[$IDX].os_variant")"
 [ -n "$OS_VARIANT" ] || OS_VARIANT="$(yaml_get_str defaults.os_variant)"
 [ -n "$OS_VARIANT" ] || error "os_variant not defined for $VM and/or no defaults.os_variant found"
 
-NET_NAME="$(yaml_get_str defaults.net)"; [ -n "$NET_NAME" ]
+NET_NAME="$(yaml_get_str defaults.net)"
+[ -n "$NET_NAME" ]
 virsh net-info "$NET_NAME" >/dev/null 2>&1 || error "libvirt network '$NET_NAME' not found"
 
 MEM="$(yaml_get_int "vm[$IDX].memory_mb" "$(yaml_get_int defaults.memory_mb 2048)")"
 VCPUS="$(yaml_get_int "vm[$IDX].vcpus" "$(yaml_get_int defaults.vcpus 2)")"
 
-IMG_URL="$(yaml_get_str "vm[$IDX].img_url")"; [ -n "$IMG_URL" ] || error "vm[$IDX].img_url not found"
+IMG_URL="$(yaml_get_str "vm[$IDX].img_url")"
+[ -n "$IMG_URL" ] || error "vm[$IDX].img_url not found"
 IMG_NAME="$(basename -- "$IMG_URL")"
 BASE_IMG="${IMAGES_DIR}/${IMG_NAME}"
 
 SUMS_URL="$(yaml_get_str "vm[$IDX].sums_url")"
-SUMS_TYPE="$(yaml_get_str "vm[$IDX].sums_type")"; [ -n "$SUMS_TYPE" ] || SUMS_TYPE="auto"
+SUMS_TYPE="$(yaml_get_str "vm[$IDX].sums_type")"
+[ -n "$SUMS_TYPE" ] || SUMS_TYPE="auto"
 
-MODE="$(yaml_get_str "vm[$IDX].mode")"; [ -n "$MODE" ] || MODE="dhcp"
+MODE="$(yaml_get_str "vm[$IDX].mode")"
+[ -n "$MODE" ] || MODE="dhcp"
+
 MAC_ADDR="$(yaml_get_str "vm[$IDX].mac")"
 
 STATIC_IP="$(yaml_get_str "vm[$IDX].ip")"
@@ -269,21 +280,32 @@ if [ "$MODE" = "static" ]; then
   [ -n "$GW" ] || GW="$(echo "$STATIC_IP" | awk -F. '{printf "%d.%d.%d.1",$1,$2,$3}')"
 fi
 
-SSH_USER="$(yaml_get_str defaults.ssh_user)"; [ -n "$SSH_USER" ]
-SSH_KEY_PATH="$(yaml_get_str defaults.ssh_key)"; [ -n "$SSH_KEY_PATH" ]
+SSH_USER="$(yaml_get_str defaults.ssh_user)"
+[ -n "$SSH_USER" ]
+
+SSH_KEY_PATH="$(yaml_get_str defaults.ssh_key)"
+[ -n "$SSH_KEY_PATH" ]
 [ -r "$SSH_KEY_PATH" ] || error "SSH key not readable $SSH_KEY_PATH"
-SSH_PUB="$(cat "$SSH_KEY_PATH".pub 2>/dev/null || ssh-keygen -y -f "$SSH_KEY_PATH" 2>/dev/null || true)"
+
+SSH_PUB="$(
+  cat "$SSH_KEY_PATH".pub 2>/dev/null \
+    || ssh-keygen -y -f "$SSH_KEY_PATH" 2>/dev/null \
+    || true
+)"
 [ -n "$SSH_PUB" ] || error "Could not obtain public key from $SSH_KEY_PATH.pub"
 
 if [ "$DESTROY" = "1" ]; then
   info "Destroying domain"
   ( virsh destroy "$VM" >/dev/null 2>&1 ) || true
+
   info "Undefining domain"
   ( virsh undefine "$VM" --nvram >/dev/null 2>&1 ) || true
+
   if [ "$PURGE_DISKS" = "1" ]; then
     info "Purging VM disks & seed"
     sudo rm -f "${IMAGES_DIR}/${VM}.qcow2" "$SEED_IMG" >/dev/null 2>&1 || true
   fi
+
   info "Done"
   exit 0
 fi
@@ -295,7 +317,10 @@ verify_image() {
   sums="$(mktemp -t vm-"${IMG_NAME}".SUMS.XXXXXX)"
   one=""
 
-  cleanup_verify(){ [ -n "$one" ] && rm -f "$one"; rm -f "$sums"; }
+  cleanup_verify() {
+    [ -n "$one" ] && rm -f "$one"
+    rm -f "$sums"
+  }
   trap cleanup_verify RETURN
 
   curl -fsSLo "$sums" $CURL_FLAGS "$SUMS_URL" || return 2
@@ -354,10 +379,15 @@ if [ "$need_download" = "0" ]; then
       need_download=0
     else
       case "$?" in
-        1) warn "Checksum mismatch, re-downloading image"; need_download=1 ;;
-        2) warn "No matching checksum or unrecognized SUMS, skipping download";
-           [ -f "$TMP_DL" ] && sudo rm -f "$TMP_DL"
-           need_download=0 ;;
+        1)
+          warn "Checksum mismatch, re-downloading image"
+          need_download=1
+          ;;
+        2)
+          warn "No matching checksum or unrecognized SUMS, skipping download"
+          [ -f "$TMP_DL" ] && sudo rm -f "$TMP_DL"
+          need_download=0
+          ;;
       esac
     fi
   else
@@ -387,8 +417,13 @@ if [ "$need_download" = "1" ]; then
 
   if ! verify_image; then
     case "$?" in
-      1) sudo rm -f "$BASE_IMG"; error "Checksum mismatch for ${IMG_NAME}" ;;
-      2) warn "Checksum inconclusive for ${IMG_NAME}" ;;
+      1)
+        sudo rm -f "$BASE_IMG"
+        error "Checksum mismatch for ${IMG_NAME}"
+        ;;
+      2)
+        warn "Checksum inconclusive for ${IMG_NAME}"
+        ;;
     esac
   else
     info "Checksum OK"
@@ -421,6 +456,7 @@ if [ "$REBUILD" = "1" ]; then
   info "Recreating VM disk at $VM_DISK"
   sudo rm -f "$VM_DISK"
 fi
+
 if [ ! -f "$VM_DISK" ]; then
   if sudo cp --reflink=auto "$BASE_IMG" "$VM_DISK" 2>/dev/null; then
     info "Created disk via reflink $VM_DISK"
@@ -457,7 +493,9 @@ if [ "$MODE" = "static" ]; then
     echo "    addresses: [ ${STATIC_IP}/${PREFIX} ]"
     echo "    routes: [ { to: 0.0.0.0/0, via: ${GW} } ]"
     echo "    dhcp-identifier: mac"
-    [ -n "$DNS_LIST" ] && echo "    nameservers: { addresses: [$(echo "${DNS_LIST}" | sed 's/,/, /g')] }"
+    if [ -n "$DNS_LIST" ]; then
+      echo "    nameservers: { addresses: [$(echo "${DNS_LIST}" | sed 's/,/, /g')] }"
+    fi
   } >"$NET_FILE"
   emit_net=1
 elif [ -n "$MAC_ADDR" ] && [ "$MAC_ADDR" != "auto" ]; then
@@ -488,26 +526,30 @@ fi
   echo "MIME-Version: 1.0"
   echo "Content-Type: multipart/mixed; boundary=\"$BOUND\""
   echo
-  if [ -n "$DEF_YAML" ] ; then
+
+  if [ -n "$DEF_YAML" ]; then
     echo "--$BOUND"
     echo "Content-Type: text/cloud-config"
     echo
     printf "%s\n" "$DEF_YAML"
   fi
-  if [ -n "$VM_YAML" ] ; then
+
+  if [ -n "$VM_YAML" ]; then
     echo "--$BOUND"
     echo "Content-Type: text/cloud-config"
     echo
     printf "%s\n" "$VM_YAML"
   fi
-  if [ -n "$DNS_CFG" ] ; then
+
+  if [ -n "$DNS_CFG" ]; then
     echo "--$BOUND"
     echo "Content-Type: text/cloud-config"
     echo
     printf "%s\n" "$DNS_CFG"
   fi
+
   echo "--$BOUND--"
-} > "$USER_FILE"
+} >"$USER_FILE"
 
 info "Creating seed image"
 if [ "$emit_net" -eq 1 ]; then
@@ -525,7 +567,9 @@ NET_ARG="network=${NET_NAME},model=virtio"
 [ -n "$MAC_ADDR" ] && [ "$MAC_ADDR" != "auto" ] && NET_ARG="${NET_ARG},mac=${MAC_ADDR}"
 
 EXTRA_ARGS=()
-[ "$FORCE_DS" = "1" ] && EXTRA_ARGS+=( --qemu-commandline "-append ds=nocloud;s=/dev/vdb/" )
+if [ "$FORCE_DS" = "1" ]; then
+  EXTRA_ARGS+=( --qemu-commandline "-append ds=nocloud;s=/dev/vdb/" )
+fi
 
 build_xml_args
 
@@ -562,11 +606,17 @@ else
   info "Waiting for DHCP lease on $NET_NAME"
   ddl=$(( $(date +%s) + WAIT_SSH_SECS ))
   while [ "$(date +%s)" -lt "$ddl" ]; do
-    ip="$(virsh net-dhcp-leases "$NET_NAME" 2>/dev/null | awk -v mac="$MAC_ADDR" '
-      tolower($0) ~ tolower(mac) {
-        for (i=1;i<=NF;i++) if ($i ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?$/) {print $i; exit}
-      }')"
-    if [ -n "$ip" ]; then TARGET_IP="${ip%%/*}"; break; fi
+    ip="$(
+      virsh net-dhcp-leases "$NET_NAME" 2>/dev/null | awk -v mac="$MAC_ADDR" '
+        tolower($0) ~ tolower(mac) {
+          for (i=1;i<=NF;i++)
+            if ($i ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?$/) {print $i; exit}
+        }'
+    )"
+    if [ -n "$ip" ]; then
+      TARGET_IP="${ip%%/*}"
+      break
+    fi
     sleep 1
   done
   [ -n "$TARGET_IP" ] || error "Could not discover DHCP lease for $MAC_ADDR on $NET_NAME"
@@ -577,9 +627,13 @@ info "Waiting up to ${WAIT_SSH_SECS}s for SSH on ${TARGET_IP}"
 ddl=$(( $(date +%s) + WAIT_SSH_SECS ))
 ok=0
 while [ "$(date +%s)" -lt "$ddl" ]; do
-  if timeout 2 bash -c "</dev/tcp/${TARGET_IP}/22" 2>/dev/null; then ok=1; break; fi
+  if timeout 2 bash -c "</dev/tcp/${TARGET_IP}/22" 2>/dev/null; then
+    ok=1
+    break
+  fi
   sleep 2
 done
+
 if [ "$ok" = "1" ]; then
   info "Setup complete"
 else
