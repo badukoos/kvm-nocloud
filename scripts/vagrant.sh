@@ -18,25 +18,11 @@ VAGRANT_PUBKEY_URL="${VAGRANT_PUBKEY_URL:-https://raw.githubusercontent.com/mitc
 info() {
   printf "\033[1;36mINFO:\033[0m %s\n" "$*"
 }
+
 error() {
   printf "\033[1;31mERROR:\033[0m %s\n" "$*" >&2
   exit 1
 }
-requires() {
-  if ! command -v "$1" >/dev/null 2>&1; then
-    error "missing tool: $1" >&2
-    exit 1
-  fi
-}
-for t in qemu-img virt-customize; do
-  requires "$t"
-done
-
-[ -n "$BOX_NAME" ] || { error "BOX_NAME required" >&2; exit 1; }
-[ -n "$SRC_IMG" ]  || { error "SRC_IMG required"  >&2; exit 1; }
-[ -f "$SRC_IMG" ]  || { error "SRC_IMG not found: $SRC_IMG" >&2; exit 1; }
-[ -r "$BOOTSTRAP_FILE" ] || { error "Bootstrap not readable: $BOOTSTRAP_FILE" >&2; exit 1; }
-[ -d "$TEMPLATES_DIR" ] || { error "Templates dir missing: $TEMPLATES_DIR" >&2; exit 1; }
 
 fetch_pubkey() {
   if [ -n "$VAGRANT_PUBKEY" ]; then
@@ -51,6 +37,23 @@ fetch_pubkey() {
     return 1
   fi
 }
+
+requires() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    error "missing tool: $1" >&2
+    exit 1
+  fi
+}
+
+for t in qemu-img virt-customize; do
+  requires "$t"
+done
+
+[ -n "$BOX_NAME" ] || { error "BOX_NAME required" >&2; exit 1; }
+[ -n "$SRC_IMG" ]  || { error "SRC_IMG required"  >&2; exit 1; }
+[ -f "$SRC_IMG" ]  || { error "SRC_IMG not found: $SRC_IMG" >&2; exit 1; }
+[ -r "$BOOTSTRAP_FILE" ] || { error "Bootstrap not readable: $BOOTSTRAP_FILE" >&2; exit 1; }
+[ -d "$TEMPLATES_DIR" ] || { error "Templates dir missing: $TEMPLATES_DIR" >&2; exit 1; }
 
 ktmp="$(mktemp)"
 fetch_pubkey >"$ktmp" || { error "Failed to retrieve Vagrant public key"; exit 1; }
