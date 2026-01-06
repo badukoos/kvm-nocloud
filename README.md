@@ -99,13 +99,40 @@ Direct installation into `~/.vagrant.d`
 
 Basic cloud-init commands
 
-| Command | Description |
-|--------|-------------|
-| `sudo cloud-init status` | Check `cloud-init` status. Tack `--long` for extended info, tack `--wait` to wait until initialization is complete |
-| `sudo cloud-init query ds` | Check `cloud-init` datasource |
-| `sudo tail -n 100 /var/log/cloud-init.log` <br> `sudo tail -n 100 /var/log/cloud-init.log` | View `cloud-init` logs |
-| `sudo cloud-init query userdata` | See parsed `cloud-init` merged user-data |
-| `sudo cloud-init analyze show` <br> `sudo cloud-init analyze blame` | Analyze `cloud-init` stage execution times and performance bottlenecks |
+Check status
+
+```bash
+sudo cloud-init status
+```
+Tack `--long` for extended info, tack `--wait` to wait until initialization is complete
+
+Check datasource
+
+```bash
+sudo cloud-init query ds
+```
+
+View logs
+
+```bash
+sudo tail -n 100 /var/log/cloud-init.log
+
+sudo tail -n 100 /var/log/cloud-init-output.log
+```
+
+Query userdata
+
+```bash
+sudo cloud-init query userdata
+```
+
+Analyze stage execution times and performance bottlenecks
+
+```bash
+sudo cloud-init analyze show
+
+sudo cloud-init analyze blame
+```
 
 To inspect VM logs directly from the host using the virt-* tools
 
@@ -126,13 +153,17 @@ Alternatively, VM filesystem can be mounted using `guestmount`
 export LIBGUESTFS_BACKEND=direct
 
 sudo mkdir -p /mnt/<vm>
+
 sudo rm -rf /mnt/<vm>/*
 
 sudo --preserve-env=LIBGUESTFS_BACKEND \
   guestmount -d <vm> -i --ro /mnt/<vm>
 
 sudo tail -n50 /mnt/<vm>/var/log/cloud-init.log
+
 sudo tail -n50 /mnt/<vm>/var/log/cloud-init-output.log
 
 sudo guestunmount /mnt/<vm>
 ```
+>[!TIP]
+> Install `libguestfs-tools/guestfs-tools` if you haven't already to avail most `virt-*` commands.
