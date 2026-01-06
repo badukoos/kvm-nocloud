@@ -13,6 +13,7 @@ INV="${INV:-${ROOT_DIR}/inventory.yml}"
 DESTROY="${DESTROY:-0}"
 PURGE_DISKS="${PURGE_DISKS:-0}"
 REBUILD="${REBUILD:-0}"
+REFRESH_BASE="${REFRESH_BASE:-0}"
 KEEP_INSTANCE_ID="${KEEP_INSTANCE_ID:-0}"
 SKIP_VERIFY="${SKIP_VERIFY:-0}"
 FORCE_DS="${FORCE_DS:-0}"
@@ -34,6 +35,7 @@ Flags:
   --destroy            DESTROY=1
   --purge-disks        PURGE_DISKS=1, used with --destroy
   --rebuild            REBUILD=1
+  --refresh-base       REFRESH_BASE=1
   --keep-instance-id   KEEP_INSTANCE_ID=1
   --skip-verify        SKIP_VERIFY=1
   --force-ds           FORCE_DS=1
@@ -45,7 +47,8 @@ Env options:
 
   DESTROY=1           Destroy and undefine the existing domain
   PURGE_DISKS=1       Used with DESTROY=1. Also removes qcow2 and seed image
-  REBUILD=1           Force re-download of the base image and recreate \${VM}.qcow2
+  REBUILD=1           Destroy &purge the VM disk & seed, then recreate and boot
+  REFRESH_BASE=1      Force re-download of the base image
   KEEP_INSTANCE_ID=1  Use a stable instance-id "\${VM}-stable" so cloud-init
                       treats rebuilds as the same instance
   SKIP_VERIFY=1       Skip checksum verification of the downloaded base image
@@ -53,7 +56,6 @@ Env options:
 
   VAGRANT_BOX=1       Package a libvirt .box from the prepared base image and exit
   DIRECT_INSTALL=1    Directly install vagrant box without creating a box file
-
 EOF
 }
 
@@ -66,6 +68,7 @@ while [ $# -gt 0 ]; do
     --destroy)          DESTROY=1; shift ;;
     --purge-disks)      PURGE_DISKS=1; shift ;;
     --rebuild)          REBUILD=1; shift ;;
+    --refresh-base)     REFRESH_BASE=1; shift ;;
     --keep-instance-id) KEEP_INSTANCE_ID=1; shift ;;
     --skip-verify)      SKIP_VERIFY=1; shift ;;
     --force-ds)         FORCE_DS=1; shift ;;
@@ -166,6 +169,11 @@ fi
 
 if [ -z "${BOX_NAME:-}" ]; then
   BOX_NAME=${VM}
+fi
+
+if [ "${REBUILD}" = "1" ]; then
+  DESTROY=1
+  PURGE_DISKS=1
 fi
 
 build_xml_args() {
@@ -306,8 +314,12 @@ if [ "$DESTROY" = "1" ]; then
     sudo rm -f "${IMAGES_DIR}/${VM}.qcow2" "$SEED_IMG" >/dev/null 2>&1 || true
   fi
 
-  info "Done"
-  exit 0
+  if [ "$REBUILD" != "1" ]; then
+    info "Done"
+    exit 0
+  fi
+
+  info "Destroyed existing VM, continuing with rebuild"
 fi
 
 verify_image() {
@@ -365,8 +377,8 @@ if sudo test -e "$TMP_DL" && ! sudo test -s "$TMP_DL"; then
   sudo rm -f "$TMP_DL"
 fi
 
-if [ "$REBUILD" = "1" ]; then
-  info "REBUILD=1 is set, this will re download base image"
+if [ "$REFRESH_BASE" = "1" ]; then
+  info "REFRESH_BASE=1 is set, forcing base image re-download"
   need_download=1
   sudo rm -f "$BASE_IMG" "$TMP_DL" 2>/dev/null || true
 fi
