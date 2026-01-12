@@ -19,6 +19,7 @@ SKIP_VERIFY="${SKIP_VERIFY:-0}"
 FORCE_DS="${FORCE_DS:-0}"
 
 VAGRANT_BOX="${VAGRANT_BOX:-0}"
+DIRECT_INSTALL="${DIRECT_INSTALL:-0}"
 BOX_NAME="${BOX_NAME:-$VM}"
 OUT_DIR="${OUT_DIR:-${ROOT_DIR}/build/boxes}"
 VAGRANTFILE_SNIPPET="${VAGRANTFILE_SNIPPET:-}"
@@ -40,6 +41,7 @@ Flags:
   --skip-verify        SKIP_VERIFY=1
   --force-ds           FORCE_DS=1
   --vagrant-box        VAGRANT_BOX=1
+  --direct-install     DIRECT_INSTALL=1
   -h, --help           Show this help
 
 Env options:
@@ -73,6 +75,7 @@ while [ $# -gt 0 ]; do
     --skip-verify)      SKIP_VERIFY=1; shift ;;
     --force-ds)         FORCE_DS=1; shift ;;
     --vagrant-box)      VAGRANT_BOX=1; shift ;;
+    --direct-install)   DIRECT_INSTALL=1; shift ;;
     --)
       shift
       break
@@ -453,7 +456,7 @@ if [ "$VAGRANT_BOX" = "1" ]; then
   SRC_IMG="$BASE_IMG" \
   PROVIDER="libvirt" \
   OUT_DIR="$OUT_DIR" \
-  BAKE_VAGRANT="${BAKE_VAGRANT:-0}" \
+  DIRECT_INSTALL="$DIRECT_INSTALL" \
   VAGRANTFILE_SNIPPET="${VAGRANTFILE_SNIPPET:-}" \
   BOOTSTRAP_FILE="$BOOTSTRAP_FILE" \
   TEMPLATES_DIR="$TEMPLATES_DIR" \
